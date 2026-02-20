@@ -1,14 +1,14 @@
-
 'use server';
 
 import qs from 'query-string';
 
 const BASE_URL = process.env.COINGECKO_BASE_URL;
-const API_KEY = process.env.COINGECKO_API_KEY;
 
 if (!BASE_URL) throw new Error('Could not get base url');
-if (!API_KEY) throw new Error('Could not get api key');
 
+/* =====================================================
+   GENERIC FETCHER (FREE API)
+===================================================== */
 export async function fetcher<T>(
     endpoint: string,
     params?: QueryParams,
@@ -19,56 +19,93 @@ export async function fetcher<T>(
             url: `${BASE_URL}/${endpoint}`,
             query: params,
         },
-        { skipEmptyString: true, skipNull: true },
+        { skipEmptyString: true, skipNull: true }
     );
 
     const response = await fetch(url, {
-        headers: {
-            'x-cg-pro-api-key': API_KEY,
-            'Content-Type': 'application/json',
-        } as Record<string, string>,
+        headers: { 'Content-Type': 'application/json' },
         next: { revalidate },
     });
 
     if (!response.ok) {
-        const errorBody: CoinGeckoErrorBody = await response.json().catch(() => ({}));
-
-        throw new Error(`API Error: ${response.status}: ${errorBody.error || response.statusText} `);
+        const errorBody: any = await response.json().catch(() => ({}));
+        throw new Error(
+            `API Error: ${response.status}: ${JSON.stringify(errorBody) || response.statusText}`
+        );
     }
 
     return response.json();
 }
 
-export async function getPools(
-    id: string,
-    network?: string | null,
-    contractAddress?: string | null,
-): Promise<PoolData> {
-    const fallback: PoolData = {
-        id: '',
-        address: '',
-        name: '',
-        network: '',
-    };
+/* =====================================================
+   COIN DETAILS
+===================================================== */
+export async function getCoin(id: string) {
+    try {
+        return await fetcher<CoinDetailsData>(`coins/${id}`, {
+            localization: false,
+            tickers: false,
+            market_data: true,
+            community_data: false,
+            developer_data: false,
+            sparkline: false,
+        });
+    } catch (error) {
+        console.error('Error fetching coin details:', error);
+        return null;
+    }
+}
 
-    if (network && contractAddress) {
-        try {
-            const poolData = await fetcher<{ data: PoolData[] }>(
-                `/onchain/networks/${network}/tokens/${contractAddress}/pools`,
-            );
+/* =====================================================
+   MARKET LIST (TOP COINS)
+===================================================== */
+export async function getMarkets() {
+    try {
+        return await fetcher<MarketCoinData[]>('coins/markets', {
+            vs_currency: 'usd',
+            order: 'market_cap_desc',
+            per_page: 10,
+            page: 1,
+            sparkline: false,
+        });
+    } catch (error) {
+        console.error('Error fetching market coins:', error);
+        return [];
+    }
+}
 
-            return poolData.data?.[0] ?? fallback;
-        } catch (error) {
-            console.log(error);
-            return fallback;
-        }
+/* =====================================================
+   TRENDING COINS
+===================================================== */
+export async function getTrendingCoins() {
+    try {
+        return await fetcher<TrendingResponse>('search/trending');
+    } catch (error) {
+        console.error('Error fetching trending coins:', error);
+        return null;
+    }
+}
+
+/* =====================================================
+   OHLC DATA (FOR CHART)
+   FREE API LIMIT: max 365 days historical
+===================================================== */
+export async function getOHLC(
+    coinId: string,
+    days: number = 1
+): Promise<OHLCData[]> {
+    const safeDays = Math.min(days, 365); // Free API max 365 days
+    if (days > 365) {
+        console.warn(`Free API cannot fetch more than 365 days. Limiting to ${safeDays} days.`);
     }
 
     try {
-        const poolData = await fetcher<{ data: PoolData[] }>('/onchain/search/pools', { query: id });
-
-        return poolData.data?.[0] ?? fallback;
-    } catch {
-        return fallback;
+        return await fetcher<OHLCData[]>(`coins/${coinId}/ohlc`, {
+            vs_currency: 'usd',
+            days: safeDays,
+        });
+    } catch (error) {
+        console.error('Error fetching OHLC data:', error);
+        return []; // Return empty array instead of throwing
     }
 }
