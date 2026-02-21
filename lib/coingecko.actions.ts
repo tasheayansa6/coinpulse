@@ -27,13 +27,20 @@ export async function fetcher<T>(
     params?: Record<string, any>,
     revalidate = 300 // cache 5 minutes
 ): Promise<T> {
-    const url = qs.stringifyUrl(
-        {
-            url: `${BASE_URL}/${endpoint}`,
-            query: params,
-        },
-        { skipNull: true, skipEmptyString: true }
-    );
+    // Check if it's a full URL or relative path
+    const isFullUrl = endpoint.startsWith('http');
+    const url = isFullUrl
+        ? qs.stringifyUrl(
+            { url: endpoint, query: params },
+            { skipNull: true, skipEmptyString: true }
+        )
+        : qs.stringifyUrl(
+            {
+                url: `${BASE_URL}/${endpoint}`,
+                query: params,
+            },
+            { skipNull: true, skipEmptyString: true }
+        );
 
     // small delay to prevent free API burst limit
     await sleep(1200);
@@ -131,7 +138,8 @@ export async function getOHLC(
     const safeDays = getClosestValidDays(days);
 
     try {
-        // ⚠️ Do NOT pass interval for free API
+        // IMPORTANT: For free API, ONLY pass vs_currency and days
+        // Do NOT include interval parameter
         return await fetcher<OHLCData[]>(`coins/${coinId}/ohlc`, {
             vs_currency: 'usd',
             days: safeDays,
@@ -141,3 +149,109 @@ export async function getOHLC(
         return [];
     }
 }
+
+/* =====================================================
+   POOLS / GECKOTERMINAL (for DEX data)
+===================================================== */
+export async function getPools(coinId: string, network?: string | null, contractAddress?: string | null) {
+    try {
+        // If we have network and contract address, get specific pool
+        if (network && contractAddress) {
+            const poolData = await fetcher<any>(`https://api.geckoterminal.com/api/v2/networks/${network}/pools/${contractAddress}`);
+            return poolData?.data || null;
+        }
+
+        // Otherwise search for pools on Ethereum (default)
+        const searchData = await fetcher<any>(`https://api.geckoterminal.com/api/v2/search/pools`, {
+            query: coinId,
+            network: 'eth',
+            page: 1,
+        });
+
+        // Return the first pool or null
+        return searchData?.data?.[0] || null;
+    } catch (error) {
+        console.error('Pools error:', error);
+        return null;
+    }
+}
+
+/* =====================================================
+   TYPE DEFINITIONS
+===================================================== */
+export interface CoinDetailsData {
+    id: string;
+    symbol: string;
+    name: string;
+    asset_platform_id?: string;
+    market_cap_rank?: number;
+    detail_platforms?: Record<string, {
+        geckoterminal_url?: string;
+        contract_address?: string;
+    }>;
+    market_data: {
+        current_price: { usd: number };
+        price_change_percentage_24h: number;
+        market_cap: { usd: number };
+        total_volume: { usd: number };
+        [key: string]: any;
+    };
+    links: {
+        homepage: string[];
+        blockchain_site: string[];
+        subreddit_url?: string;
+        [key: string]: any;
+    };
+    image: {
+        thumb: string;
+        small: string;
+        large: string;
+    };
+    [key: string]: any;
+}
+
+export interface MarketCoinData {
+    id: string;
+    symbol: string;
+    name: string;
+    image: string;
+    current_price: number;
+    market_cap: number;
+    market_cap_rank: number;
+    total_volume: number;
+    price_change_percentage_24h: number;
+    [key: string]: any;
+}
+
+export interface TrendingResponse {
+    coins: Array<{
+        item: {
+            id: string;
+            coin_id: number;
+            name: string;
+            symbol: string;
+            market_cap_rank: number;
+            thumb: string;
+            small: string;
+            large: string;
+            slug: string;
+            price_btc: number;
+            score: number;
+            data: {
+                price: number;
+                price_btc: string;
+                price_change_percentage_24h: { [key: string]: number };
+                market_cap: string;
+                market_cap_btc: string;
+                total_volume: string;
+                total_volume_btc: string;
+                sparkline: string;
+                content: any | null;
+            };
+        };
+    }>;
+    nfts: any[];
+    categories: any[];
+}
+
+export type OHLCData = [number, number, number, number, number];
